@@ -20,7 +20,7 @@ export async function processMonthlyReport(formData: FormData): Promise<MonthlyA
     if (!isMonthlyReportCSV(text)) {
       return { error: 'This does not appear to be a monthly freebet report CSV. Please check the file.' };
     }
-    const report = processMonthlyCSV(text);
+    const report = processMonthlyCSV(text, file.name);
     return { report };
   } catch (e) {
     return {

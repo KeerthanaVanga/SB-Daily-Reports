@@ -130,7 +130,7 @@ export function isMonthlyReportCSV(text: string): boolean {
 }
 
 // ── Main processor ────────────────────────────────────────────────────────────
-export function processMonthlyCSV(csvText: string): MonthlyReport {
+export function processMonthlyCSV(csvText: string, filename = ''): MonthlyReport {
   const parsed = Papa.parse<string[]>(csvText, { header: false, skipEmptyLines: false });
   const allRows = parsed.data as string[][];
 
@@ -213,5 +213,6 @@ export function processMonthlyCSV(csvText: string): MonthlyReport {
   // Monthly total across everything
   const monthlyTotal = computeRates('Monthly Total', rawRows);
 
-  return { groups, individuals, monthlyTotal };
+  const brandName = filename.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ').trim();
+  return { brandName, groups, individuals, monthlyTotal };
 }
