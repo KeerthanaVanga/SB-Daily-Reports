@@ -1,124 +1,171 @@
 'use client';
 
-import { useRef, useState, useTransition, useCallback } from 'react';
+import { useRef, useState, useTransition } from 'react';
 import { processReports, ActionState } from '../actions/processReport';
 import ReportView from './ReportView';
 import { downloadStyledExcel } from '../../lib/excelExport';
 
 const EMPTY_STATE: ActionState = { reports: [] };
+const MAX_BRANDS = 6;
 
 export default function DailyUploadSection() {
   const [state, setState] = useState<ActionState>(EMPTY_STATE);
   const [isPending, startTransition] = useTransition();
-  const [dragging, setDragging] = useState(false);
-  const [selectedFiles, setSelectedFiles] = useState<string[]>([]);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [brandCount, setBrandCount] = useState(1);
+  const [slots, setSlots] = useState<(File | null)[]>([null]);
+  const [draggingSlot, setDraggingSlot] = useState<number | null>(null);
+  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
-  const handleFiles = useCallback((fileList: FileList | null) => {
-    if (!fileList || fileList.length === 0) return;
-    const names = Array.from(fileList).map(f => f.name);
-    setSelectedFiles(names);
+  const hasReports = state.reports.length > 0;
+  const filledCount = slots.filter(Boolean).length;
+
+  function changeCount(n: number) {
+    setBrandCount(n);
+    setSlots(prev => {
+      const next = [...prev];
+      while (next.length < n) next.push(null);
+      return next.slice(0, n);
+    });
+    setState(EMPTY_STATE);
+  }
+
+  function setSlotFile(i: number, file: File) {
+    setSlots(prev => { const next = [...prev]; next[i] = file; return next; });
+  }
+
+  function generate() {
+    const files = slots.filter(Boolean) as File[];
+    if (!files.length) return;
     const fd = new FormData();
-    Array.from(fileList).forEach(f => fd.append('files', f));
+    files.forEach(f => fd.append('files', f));
     startTransition(async () => {
       const result = await processReports(fd);
       setState(result);
     });
-  }, [startTransition]);
+  }
 
-  const onInputChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => handleFiles(e.target.files),
-    [handleFiles]
-  );
-
-  const onDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      setDragging(false);
-      handleFiles(e.dataTransfer.files);
-    },
-    [handleFiles]
-  );
-
-  const reset = () => {
+  function reset() {
     setState(EMPTY_STATE);
-    setSelectedFiles([]);
-    if (inputRef.current) inputRef.current.value = '';
-  };
-
-  const hasReports = state.reports.length > 0;
+    setSlots(Array(brandCount).fill(null));
+    inputRefs.current.forEach(r => { if (r) r.value = ''; });
+  }
 
   return (
-    <div className="space-y-8">
-      {/* Upload zone */}
-      <div
-        className={`relative rounded-2xl border-2 border-dashed transition-all duration-200 cursor-pointer
-          ${dragging
-            ? 'border-indigo-400 bg-indigo-50/60 scale-[1.01] shadow-md'
-            : hasReports
-              ? 'border-slate-200 bg-slate-50 hover:border-indigo-300 hover:bg-indigo-50/30'
-              : 'border-slate-300 bg-white hover:border-indigo-400 hover:bg-indigo-50/30 shadow-sm'
-          }
-          ${isPending ? 'pointer-events-none opacity-70' : ''}
-          print:hidden`}
-        onDragOver={e => { e.preventDefault(); setDragging(true); }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={onDrop}
-        onClick={() => !isPending && inputRef.current?.click()}
-        role="button"
-        aria-label="Upload CSV files"
-      >
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".csv,text/csv"
-          multiple
-          className="hidden"
-          onChange={onInputChange}
-        />
-        <div className="flex flex-col items-center justify-center px-8 py-10 gap-3 text-center">
-          {isPending ? (
-            <>
-              <div className="h-12 w-12 rounded-full border-4 border-indigo-200 border-t-indigo-600 animate-spin" />
-              <p className="text-sm font-semibold text-indigo-700">Processing your data…</p>
-              <p className="text-xs text-slate-400">{selectedFiles.join(', ')}</p>
-            </>
-          ) : dragging ? (
-            <>
-              <span className="text-5xl">📂</span>
-              <p className="text-base font-semibold text-indigo-700">Release to upload</p>
-            </>
-          ) : (
-            <>
-              <div className="h-14 w-14 rounded-2xl bg-indigo-100 flex items-center justify-center">
-                <svg className="h-7 w-7 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-                </svg>
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-slate-700">
-                  {hasReports ? 'Upload new files to refresh' : 'Drag & drop CSV files here'}
+    <div className="space-y-6">
+
+      {/* ── Step 1: brand count ── */}
+      {!hasReports && (
+        <div className="bg-white rounded-xl border border-slate-200 px-5 py-4 shadow-sm print:hidden">
+          <p className="text-sm font-semibold text-slate-700 mb-3">
+            How many brands do you want to upload?
+          </p>
+          <div className="flex gap-2">
+            {Array.from({ length: MAX_BRANDS }, (_, i) => i + 1).map(n => (
+              <button
+                key={n}
+                onClick={() => changeCount(n)}
+                className={`w-10 h-10 rounded-lg font-bold text-sm transition-all border
+                  ${brandCount === n
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                    : 'bg-white text-slate-600 border-slate-300 hover:border-indigo-400 hover:text-indigo-600'
+                  }`}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Step 2: file slots ── */}
+      {!hasReports && (
+        <div className={`grid gap-4 print:hidden
+          ${brandCount === 1 ? 'grid-cols-1 max-w-sm' : brandCount === 2 ? 'grid-cols-2' : 'grid-cols-2 lg:grid-cols-3'}`}
+        >
+          {slots.map((file, i) => (
+            <div
+              key={i}
+              className={`relative rounded-xl border-2 border-dashed transition-all cursor-pointer min-h-[130px]
+                ${draggingSlot === i
+                  ? 'border-indigo-400 bg-indigo-50 scale-[1.02] shadow-md'
+                  : file
+                    ? 'border-emerald-400 bg-emerald-50'
+                    : 'border-slate-300 bg-white hover:border-indigo-400 hover:bg-indigo-50/40'
+                }
+                ${isPending ? 'pointer-events-none opacity-60' : ''}`}
+              onDragOver={e => { e.preventDefault(); setDraggingSlot(i); }}
+              onDragLeave={() => setDraggingSlot(null)}
+              onDrop={e => {
+                e.preventDefault();
+                setDraggingSlot(null);
+                const f = e.dataTransfer.files[0];
+                if (f) setSlotFile(i, f);
+              }}
+              onClick={() => inputRefs.current[i]?.click()}
+            >
+              <input
+                ref={el => { inputRefs.current[i] = el; }}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={e => { const f = e.target.files?.[0]; if (f) setSlotFile(i, f); }}
+              />
+              <div className="flex flex-col items-center justify-center p-5 gap-2 text-center h-full">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                  Brand {i + 1}
                 </p>
-                <p className="text-xs text-slate-400 mt-0.5">or click to browse — one file per brand, multiple supported</p>
-              </div>
-              {selectedFiles.length > 0 && !hasReports && (
-                <div className="flex flex-wrap justify-center gap-2 mt-1">
-                  {selectedFiles.map(name => (
-                    <span key={name} className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-3 py-0.5 text-xs font-medium text-indigo-700">
-                      <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
-                        <path d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4z" />
+                {file ? (
+                  <>
+                    <div className="h-9 w-9 rounded-full bg-emerald-100 flex items-center justify-center">
+                      <svg className="h-5 w-5 text-emerald-600" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M16.704 4.153a.75.75 0 01.143 1.052l-8 10.5a.75.75 0 01-1.127.075l-4.5-4.5a.75.75 0 011.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 011.05-.143z" clipRule="evenodd" />
                       </svg>
-                      {name}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </>
+                    </div>
+                    <p className="text-xs font-semibold text-emerald-700 truncate w-full px-1">{file.name}</p>
+                    <p className="text-[10px] text-slate-400">Click to replace</p>
+                  </>
+                ) : (
+                  <>
+                    <div className="h-9 w-9 rounded-lg bg-slate-100 flex items-center justify-center">
+                      <svg className="h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                      </svg>
+                    </div>
+                    <p className="text-xs font-medium text-slate-500">Drop CSV or click to browse</p>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Generate button ── */}
+      {!hasReports && (
+        <div className="flex items-center gap-4 print:hidden">
+          <button
+            onClick={generate}
+            disabled={filledCount === 0 || isPending}
+            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 disabled:cursor-not-allowed px-5 py-2.5 text-sm font-semibold text-white shadow-sm active:scale-95 transition-all"
+          >
+            {isPending ? (
+              <>
+                <div className="h-4 w-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+                Processing…
+              </>
+            ) : (
+              `Generate Report${filledCount !== 1 ? 's' : ''} (${filledCount})`
+            )}
+          </button>
+          {filledCount > 0 && !isPending && (
+            <p className="text-xs text-slate-500">
+              {filledCount} of {brandCount} slot{brandCount !== 1 ? 's' : ''} filled
+            </p>
           )}
         </div>
-      </div>
+      )}
 
-      {/* Error */}
+      {/* ── Error ── */}
       {state.error && (
         <div className="flex items-start gap-3 rounded-xl bg-rose-50 border border-rose-200 px-4 py-3 print:hidden">
           <svg className="h-5 w-5 text-rose-500 mt-0.5 shrink-0" viewBox="0 0 20 20" fill="currentColor">
@@ -128,13 +175,13 @@ export default function DailyUploadSection() {
         </div>
       )}
 
-      {/* Action bar */}
+      {/* ── Action bar ── */}
       {hasReports && (
-        <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
-          <p className="text-sm text-slate-500">
-            Generated report for{' '}
-            <span className="font-semibold text-slate-700">
-              {state.reports.map(r => r.brandName).join(', ')}
+        <div className="flex flex-wrap items-center justify-between gap-3 print:hidden bg-slate-50 rounded-xl border border-slate-200 px-4 py-3">
+          <p className="text-sm font-semibold text-slate-700">
+            {state.reports.length} brand report{state.reports.length !== 1 ? 's' : ''} ready
+            <span className="font-normal text-slate-400 ml-2">
+              {state.reports.map(r => r.brandName).join(' • ')}
             </span>
           </p>
           <div className="flex gap-2">
@@ -160,13 +207,13 @@ export default function DailyUploadSection() {
               onClick={reset}
               className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm hover:bg-slate-50 active:scale-95 transition-all"
             >
-              Clear
+              ↻ New Report
             </button>
           </div>
         </div>
       )}
 
-      {/* Reports */}
+      {/* ── Reports ── */}
       {hasReports && (
         <div className="space-y-6">
           {state.reports.map((report, i) => (
@@ -174,6 +221,7 @@ export default function DailyUploadSection() {
           ))}
         </div>
       )}
+
     </div>
   );
 }
