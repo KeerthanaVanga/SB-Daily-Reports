@@ -59,41 +59,15 @@ function toRows(items: { email?: string; name?: string; bets: number; turnoverEu
 }
 
 export default function ReportView({ report }: { report: BrandReport }) {
-  const isProfit = report.ggrEur >= 0;
-
   return (
     <article className="border border-slate-300 bg-white overflow-hidden print:border-slate-400">
 
-      {/* Summary header */}
+      {/* Brand + date row */}
       <table className="w-full border-collapse text-xs">
-        <thead>
-          <tr className="bg-white text-slate-600 font-semibold">
-            <th className="border border-slate-300 px-2 py-1.5 text-left">Name</th>
-            <th className="border border-slate-300 px-2 py-1.5 text-left">Date</th>
-            <th className="border border-slate-300 px-2 py-1.5 text-right">Players</th>
-            <th className="border border-slate-300 px-2 py-1.5 text-right">New Players</th>
-            <th className="border border-slate-300 px-2 py-1.5 text-right">Total Bets</th>
-            <th className="border border-slate-300 px-2 py-1.5 text-right">Turnover (€)</th>
-            <th className="border border-slate-300 px-2 py-1.5 text-right">GGR (€)</th>
-            <th className="border border-slate-300 px-2 py-1.5 text-right">Margin (%)</th>
-            <th className="border border-slate-300 px-2 py-1.5 text-right">Avg Bet (€)</th>
-          </tr>
-        </thead>
         <tbody>
-          <tr>
-            <td className="border border-slate-300 px-2 py-1.5 capitalize font-semibold">{report.brandName}</td>
+          <tr className="bg-white text-slate-700 font-semibold">
+            <td className="border border-slate-300 px-2 py-1.5 capitalize">{report.brandName}</td>
             <td className="border border-slate-300 px-2 py-1.5">{report.date}</td>
-            <td className="border border-slate-300 px-2 py-1.5 text-right">{report.players}</td>
-            <td className="border border-slate-300 px-2 py-1.5 text-right">{report.newPlayers}</td>
-            <td className="border border-slate-300 px-2 py-1.5 text-right">{report.totalBets}</td>
-            <td className="border border-slate-300 px-2 py-1.5 text-right font-mono">€{fmt(report.turnoverEur)}</td>
-            <td className={`border border-slate-300 px-2 py-1.5 text-right font-mono font-semibold ${isProfit ? 'text-green-600' : 'text-red-500'}`}>
-              {isProfit ? '' : '-'}€{fmt(Math.abs(report.ggrEur))}
-            </td>
-            <td className={`border border-slate-300 px-2 py-1.5 text-right font-semibold ${isProfit ? 'text-green-600' : 'text-red-500'}`}>
-              {report.margin.toFixed(2)}%
-            </td>
-            <td className="border border-slate-300 px-2 py-1.5 text-right font-mono">€ {fmt(report.avgBetEur)}</td>
           </tr>
         </tbody>
       </table>
