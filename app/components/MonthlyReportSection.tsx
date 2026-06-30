@@ -1,12 +1,29 @@
 'use client';
 
-import { useRef, useState, useTransition } from 'react';
-import { processMonthlyReport } from '../actions/monthlyReport';
+import { useRef, useState, useTransition, useCallback, useEffect } from 'react';
+import { processMonthlyCSV, isMonthlyReportCSV, STANDARD_GROUP_NAMES, ADHOC_GROUP_NAME, BRAND_CONFIGS, detectBrand, ADHOC_NAMES } from '../../lib/monthlyReportProcessor';
 import { downloadMonthlyExcel } from '../../lib/monthlyReportExcelExport';
-import type { AggregatedRow, MonthlyReport } from '../../lib/monthlyReportProcessor';
+import type { AggregatedRow, MonthlyReport, KeyAlias } from '../../lib/monthlyReportProcessor';
 
 type SortKey = keyof AggregatedRow;
 type SortDir = 'asc' | 'desc';
+
+interface UiPromoGroup {
+  id: number;
+  name: string;
+}
+
+interface UserStdGroup {
+  id: number;
+  name: string;
+  keywords: string;
+  brand: string; // brand key this group belongs to
+}
+
+interface CachedCsv {
+  text: string;
+  filename: string;
+}
 
 const MAX_BRANDS = 6;
 
@@ -49,34 +66,61 @@ function ReportTable({
   onToggleSort,
   onToggleGroup,
   onDownload,
+  onAssignKey,
+  keyAliases,
+  onRemoveAlias,
+  onHideKey,
+  onDemoteKey,
 }: {
   report: MonthlyReport;
   reportIdx: number;
-  sortKey: SortKey;
+  sortKey: SortKey | null;
   sortDir: SortDir;
   expandedGroups: Set<string>;
   onToggleSort: (k: SortKey) => void;
   onToggleGroup: (key: string) => void;
   onDownload: () => void;
+  onAssignKey: (bonusKey: string, groupName: string) => void;
+  keyAliases: KeyAlias[];
+  onRemoveAlias: (bonusKey: string) => void;
+  onHideKey: (bonusKey: string) => void;
+  onDemoteKey: (bonusKey: string) => void;
 }) {
-  const sortedGroups = [...report.groups]
-    .sort((a, b) => cmp(a.total, b.total, sortKey, sortDir))
-    .map(g => ({ ...g, members: [...g.members].sort((a, b) => cmp(a, b, sortKey, sortDir)) }));
-  const sortedIndividuals = [...report.individuals].sort((a, b) => cmp(a, b, sortKey, sortDir));
+  const [draggedKey, setDraggedKey] = useState<string | null>(null);
+  const [dragOverGroup, setDragOverGroup] = useState<string | null>(null);
+  const justDropped = useRef(false);
+
+  const sortedGroups = sortKey
+    ? [...report.groups]
+        .sort((a, b) => cmp(a.total, b.total, sortKey, sortDir))
+        .map(g => ({ ...g, members: [...g.members].sort((a, b) => cmp(a, b, sortKey, sortDir)) }))
+    : report.groups;
+  const sortedIndividuals = sortKey
+    ? [...report.individuals].sort((a, b) => cmp(a, b, sortKey, sortDir))
+    : report.individuals;
 
   const bodyRows: React.ReactNode[] = [];
 
   for (const g of sortedGroups) {
     const gKey = `${reportIdx}:${g.name}`;
     const expanded = expandedGroups.has(gKey);
+    const isDropTarget = dragOverGroup === gKey && !!draggedKey;
     bodyRows.push(
-      <tr key={gKey} onClick={() => onToggleGroup(gKey)} className="bg-blue-50 hover:bg-blue-100 cursor-pointer transition-colors border-b border-blue-200">
+      <tr
+        key={gKey}
+        onClick={() => { if (justDropped.current) { justDropped.current = false; return; } if (!draggedKey) onToggleGroup(gKey); }}
+        onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverGroup(gKey); }}
+        onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverGroup(null); }}
+        onDrop={e => { e.preventDefault(); justDropped.current = true; const k = e.dataTransfer.getData('text/plain'); if (k) onAssignKey(k, g.name); setDragOverGroup(null); setDraggedKey(null); }}
+        className={`cursor-pointer transition-all border-b ${isDropTarget ? 'bg-violet-100 border-violet-400 outline outline-2 outline-violet-400 outline-offset-[-2px]' : 'bg-blue-50 hover:bg-blue-100 border-blue-200'}`}
+      >
         {COLS.map(col => (
-          <td key={col.key} className={`px-3 py-2.5 font-semibold text-blue-900 whitespace-nowrap ${col.align === 'right' ? 'text-right' : 'text-left'}`}>
+          <td key={col.key} className={`px-3 py-2.5 font-semibold whitespace-nowrap ${isDropTarget ? 'text-violet-800' : 'text-blue-900'} ${col.align === 'right' ? 'text-right' : 'text-left'}`}>
             {col.key === 'bonusKey' ? (
               <span className="inline-flex items-center gap-2">
-                <span className="text-blue-400 text-[10px] transition-transform duration-150 inline-block" style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
+                <span className={`text-[10px] transition-transform duration-150 inline-block ${isDropTarget ? 'text-violet-400' : 'text-blue-400'}`} style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
                 {g.name}
+                {isDropTarget && <span className="ml-1 text-[10px] font-normal text-violet-500 animate-pulse">Drop here</span>}
               </span>
             ) : col.fmt(g.total)}
           </td>
@@ -85,11 +129,26 @@ function ReportTable({
     );
     if (expanded) {
       for (const m of g.members) {
+        const isMapped = keyAliases.some(a => a.bonusKey.toLowerCase() === m.bonusKey.toLowerCase());
         bodyRows.push(
           <tr key={`${gKey}-${m.bonusKey}`} className="bg-blue-50/40 hover:bg-blue-50 border-b border-slate-100 transition-colors">
             {COLS.map(col => (
               <td key={col.key} className={`px-3 py-2 text-blue-800 whitespace-nowrap ${col.align === 'right' ? 'text-right' : 'text-left'}`}>
-                {col.key === 'bonusKey' ? <span className="pl-6 text-blue-700">{m.bonusKey}</span> : col.fmt(m)}
+                {col.key === 'bonusKey' ? (
+                  <span className="pl-6 flex items-center gap-2">
+                    <span className="text-blue-700 truncate max-w-[200px]">{m.bonusKey}</span>
+                    <span className="inline-flex items-center gap-1.5 shrink-0">
+                      {isMapped && <span className="text-[9px] text-violet-400 font-semibold bg-violet-50 border border-violet-200 rounded px-1 py-0.5">mapped</span>}
+                      <button
+                        onClick={e => { e.stopPropagation(); onDemoteKey(m.bonusKey); }}
+                        className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-rose-100 text-rose-500 hover:bg-rose-500 hover:text-white transition-colors"
+                        title="Delete — return to unassigned list"
+                      >
+                        <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1 1l6 6M7 1L1 7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
+                      </button>
+                    </span>
+                  </span>
+                ) : col.fmt(m)}
               </td>
             ))}
           </tr>
@@ -98,12 +157,33 @@ function ReportTable({
     }
   }
 
+  const isDragging = !!draggedKey;
+
   sortedIndividuals.forEach((ind, i) => {
+    const beingDragged = draggedKey === ind.bonusKey;
     bodyRows.push(
-      <tr key={`${reportIdx}-ind-${ind.bonusKey}`} className={`border-b border-slate-100 hover:bg-slate-50 transition-colors ${i % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}`}>
+      <tr
+        key={`${reportIdx}-ind-${ind.bonusKey}`}
+        draggable
+        onDragStart={e => { e.dataTransfer.setData('text/plain', ind.bonusKey); e.dataTransfer.effectAllowed = 'move'; setDraggedKey(ind.bonusKey); }}
+        onDragEnd={() => { setDraggedKey(null); setDragOverGroup(null); }}
+        className={`border-b border-slate-100 transition-all cursor-grab active:cursor-grabbing select-none ${beingDragged ? 'opacity-40 bg-violet-50' : i % 2 === 0 ? 'bg-white hover:bg-slate-50' : 'bg-slate-50/60 hover:bg-slate-50'}`}
+      >
         {COLS.map(col => (
           <td key={col.key} className={`px-3 py-2.5 text-slate-700 whitespace-nowrap ${col.align === 'right' ? 'text-right' : 'text-left'}`}>
-            {col.fmt(ind)}
+            {col.key === 'bonusKey' ? (
+              <span className="flex items-center gap-1.5">
+                <span className="text-slate-300 text-[13px] leading-none shrink-0" title="Drag to map to a group">⠿</span>
+                <span className="truncate max-w-[200px]">{ind.bonusKey}</span>
+                {!isDragging && (
+                  <span className="inline-flex items-center gap-1 shrink-0">
+                    <span className="text-[9px] text-slate-300 font-normal">drag to group</span>
+                    <span className="text-slate-200">|</span>
+                    <button onClick={e => { e.stopPropagation(); onHideKey(ind.bonusKey); }} className="text-[10px] text-rose-400 hover:text-rose-600 font-semibold transition-colors" title="Remove from report">× Remove</button>
+                  </span>
+                )}
+              </span>
+            ) : col.fmt(ind)}
           </td>
         ))}
       </tr>
@@ -173,10 +253,163 @@ export default function MonthlyReportSection() {
   const [brandCount, setBrandCount] = useState(1);
   const [slots, setSlots] = useState<(File | null)[]>([null]);
   const [draggingSlot, setDraggingSlot] = useState<number | null>(null);
-  const [sortKey, setSortKey] = useState<SortKey>('issuedCount');
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [promoGroups, setPromoGroups] = useState<UiPromoGroup[]>([]);
+  const [showPromoPanel, setShowPromoPanel] = useState(false);
+  const [showPromoManager, setShowPromoManager] = useState(false);
+  const [userStdGroups, setUserStdGroups] = useState<UserStdGroup[]>([]);
+  const [keyAliases, setKeyAliases] = useState<KeyAlias[]>([]);
+  const [hiddenKeys, setHiddenKeys] = useState<string[]>([]);
+  const [demotedKeys, setDemotedKeys] = useState<string[]>([]);
+  const [cachedCsvs, setCachedCsvs] = useState<CachedCsv[]>([]);
+  const [needsReprocess, setNeedsReprocess] = useState(false);
+  const [addingToBrand, setAddingToBrand] = useState<string | null>(null);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupKeywords, setNewGroupKeywords] = useState('');
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const nextPromoId = useRef(0);
+  const nextUserGroupId = useRef(0);
+
+  // Persist aliases and user-added groups to localStorage
+  useEffect(() => {
+    try { const s = localStorage.getItem('promoKeyAliases'); if (s) setKeyAliases(JSON.parse(s)); } catch {}
+    try { const s = localStorage.getItem('userStdGroups'); if (s) { const g = JSON.parse(s); setUserStdGroups(g); if (g.length) nextUserGroupId.current = Math.max(...g.map((x: UserStdGroup) => x.id)) + 1; } } catch {}
+    try { const s = localStorage.getItem('hiddenPromoKeys'); if (s) setHiddenKeys(JSON.parse(s)); } catch {}
+    try { const s = localStorage.getItem('demotedPromoKeys'); if (s) setDemotedKeys(JSON.parse(s)); } catch {}
+  }, []);
+  useEffect(() => { try { localStorage.setItem('promoKeyAliases', JSON.stringify(keyAliases)); } catch {} }, [keyAliases]);
+  useEffect(() => { try { localStorage.setItem('userStdGroups', JSON.stringify(userStdGroups)); } catch {} }, [userStdGroups]);
+  useEffect(() => { try { localStorage.setItem('hiddenPromoKeys', JSON.stringify(hiddenKeys)); } catch {} }, [hiddenKeys]);
+  useEffect(() => { try { localStorage.setItem('demotedPromoKeys', JSON.stringify(demotedKeys)); } catch {} }, [demotedKeys]);
+
+  const addPromoGroup = useCallback(() => {
+    setPromoGroups(prev => [...prev, { id: nextPromoId.current++, name: '' }]);
+    setShowPromoPanel(true);
+  }, []);
+
+  const updatePromoGroupName = useCallback((id: number, value: string) => {
+    setPromoGroups(prev => prev.map(g => g.id === id ? { ...g, name: value } : g));
+  }, []);
+
+  const removePromoGroup = useCallback((id: number) => {
+    setPromoGroups(prev => prev.filter(g => g.id !== id));
+  }, []);
+
+  function addUserStdGroupToBrand(brand: string) {
+    if (!newGroupName.trim()) return;
+    setUserStdGroups(prev => [...prev, { id: nextUserGroupId.current++, name: newGroupName.trim(), keywords: newGroupKeywords.trim(), brand }]);
+    setNewGroupName('');
+    setNewGroupKeywords('');
+    setAddingToBrand(null);
+  }
+
+  function removeUserStdGroup(id: number) {
+    setUserStdGroups(prev => prev.filter(g => g.id !== id));
+  }
+
+  function assignKey(bonusKey: string, groupName: string) {
+    const newAliases = [
+      ...keyAliases.filter(a => a.bonusKey.toLowerCase() !== bonusKey.toLowerCase()),
+      { bonusKey, groupName },
+    ];
+    const newDemoted = demotedKeys.filter(k => k.toLowerCase() !== bonusKey.toLowerCase());
+    setKeyAliases(newAliases);
+    setDemotedKeys(newDemoted);
+    if (!cachedCsvs.length) return;
+    startTransition(async () => {
+      const newReports: MonthlyReport[] = [];
+      const newErrors: string[] = [];
+      for (const { text, filename } of cachedCsvs) {
+        try {
+          newReports.push(processMonthlyCSV(text, filename, buildCustomGroups(filename), newAliases, hiddenKeys, newDemoted));
+        } catch (e) {
+          newErrors.push(`${filename}: ${e instanceof Error ? e.message : 'Unexpected error.'}`);
+        }
+      }
+      applyResults(newReports, newErrors);
+    });
+  }
+
+  function removeAlias(bonusKey: string) {
+    const newAliases = keyAliases.filter(a => a.bonusKey.toLowerCase() !== bonusKey.toLowerCase());
+    setKeyAliases(newAliases);
+    if (!cachedCsvs.length) return;
+    startTransition(async () => {
+      const newReports: MonthlyReport[] = [];
+      const newErrors: string[] = [];
+      for (const { text, filename } of cachedCsvs) {
+        try {
+          newReports.push(processMonthlyCSV(text, filename, buildCustomGroups(filename), newAliases, hiddenKeys, demotedKeys));
+        } catch (e) {
+          newErrors.push(`${filename}: ${e instanceof Error ? e.message : 'Unexpected error.'}`);
+        }
+      }
+      applyResults(newReports, newErrors);
+    });
+  }
+
+  function demoteKey(bonusKey: string) {
+    const newDemoted = [...demotedKeys.filter(k => k.toLowerCase() !== bonusKey.toLowerCase()), bonusKey];
+    const newAliases = keyAliases.filter(a => a.bonusKey.toLowerCase() !== bonusKey.toLowerCase());
+    setDemotedKeys(newDemoted);
+    setKeyAliases(newAliases);
+    if (!cachedCsvs.length) return;
+    startTransition(async () => {
+      const newReports: MonthlyReport[] = [];
+      const newErrors: string[] = [];
+      for (const { text, filename } of cachedCsvs) {
+        try {
+          newReports.push(processMonthlyCSV(text, filename, buildCustomGroups(filename), newAliases, hiddenKeys, newDemoted));
+        } catch (e) {
+          newErrors.push(`${filename}: ${e instanceof Error ? e.message : 'Unexpected error.'}`);
+        }
+      }
+      applyResults(newReports, newErrors);
+    });
+  }
+
+  function hideKey(bonusKey: string) {
+    const newHidden = [...hiddenKeys.filter(k => k.toLowerCase() !== bonusKey.toLowerCase()), bonusKey];
+    setHiddenKeys(newHidden);
+    if (!cachedCsvs.length) return;
+    startTransition(async () => {
+      const newReports: MonthlyReport[] = [];
+      const newErrors: string[] = [];
+      for (const { text, filename } of cachedCsvs) {
+        try {
+          newReports.push(processMonthlyCSV(text, filename, buildCustomGroups(filename), keyAliases, newHidden, demotedKeys));
+        } catch (e) {
+          newErrors.push(`${filename}: ${e instanceof Error ? e.message : 'Unexpected error.'}`);
+        }
+      }
+      applyResults(newReports, newErrors);
+    });
+  }
+
+  function unhideKey(bonusKey: string) {
+    const newHidden = hiddenKeys.filter(k => k.toLowerCase() !== bonusKey.toLowerCase());
+    setHiddenKeys(newHidden);
+    if (!cachedCsvs.length) return;
+    startTransition(async () => {
+      const newReports: MonthlyReport[] = [];
+      const newErrors: string[] = [];
+      for (const { text, filename } of cachedCsvs) {
+        try {
+          newReports.push(processMonthlyCSV(text, filename, buildCustomGroups(filename), keyAliases, newHidden, demotedKeys));
+        } catch (e) {
+          newErrors.push(`${filename}: ${e instanceof Error ? e.message : 'Unexpected error.'}`);
+        }
+      }
+      applyResults(newReports, newErrors);
+    });
+  }
+
+  const allGroupNames = [
+    ...STANDARD_GROUP_NAMES,
+    ...userStdGroups.filter(g => g.name.trim()).map(g => g.name.trim()),
+  ];
 
   const hasReports = reports.length > 0;
   const filledCount = slots.filter(Boolean).length;
@@ -196,34 +429,76 @@ export default function MonthlyReportSection() {
     setSlots(prev => { const next = [...prev]; next[i] = file; return next; });
   }
 
+  function buildCustomGroups(filename: string) {
+    const fileBrand = detectBrand(filename);
+    return [
+      ...promoGroups.filter(g => g.name.trim()).map(g => ({ name: g.name.trim(), keywords: [g.name.trim()] })),
+      ...userStdGroups
+        .filter(g => g.name.trim() && (!fileBrand || !g.brand || g.brand === fileBrand))
+        .map(g => ({
+          name: g.name.trim(),
+          keywords: g.keywords ? g.keywords.split(',').map(k => k.trim()).filter(Boolean) : [g.name.trim()],
+        })),
+    ];
+  }
+
+  function applyResults(newReports: MonthlyReport[], newErrors: string[], expandAll = false) {
+    setReports(newReports);
+    setErrors(newErrors);
+    setNeedsReprocess(false);
+    if (expandAll && newReports.length > 0) {
+      setExpandedGroups(new Set(newReports.flatMap((r, ri) => r.groups.map(g => `${ri}:${g.name}`))));
+    }
+  }
+
   function generate() {
     const files = slots.filter(Boolean) as File[];
     if (!files.length) return;
+    const aliases = keyAliases;
     startTransition(async () => {
-      const results = await Promise.all(files.map(file => {
-        const fd = new FormData();
-        fd.append('file', file);
-        return processMonthlyReport(fd);
-      }));
       const newReports: MonthlyReport[] = [];
       const newErrors: string[] = [];
-      for (const res of results) {
-        if (res.report) newReports.push(res.report);
-        if (res.error) newErrors.push(res.error);
+      const csvCache: CachedCsv[] = [];
+      for (const file of files) {
+        try {
+          const text = await file.text();
+          if (!isMonthlyReportCSV(text)) {
+            newErrors.push(`${file.name}: This does not appear to be a monthly freebet report CSV.`);
+            continue;
+          }
+          csvCache.push({ text, filename: file.name });
+          newReports.push(processMonthlyCSV(text, file.name, buildCustomGroups(file.name), aliases, hiddenKeys, demotedKeys));
+        } catch (e) {
+          newErrors.push(`${file.name}: ${e instanceof Error ? e.message : 'Unexpected error processing file.'}`);
+        }
       }
-      setReports(newReports);
-      setErrors(newErrors);
-      if (newReports.length > 0) {
-        setExpandedGroups(new Set(
-          newReports.flatMap((r, ri) => r.groups.map(g => `${ri}:${g.name}`))
-        ));
+      setCachedCsvs(csvCache);
+      applyResults(newReports, newErrors, true);
+    });
+  }
+
+  function reprocess() {
+    if (!cachedCsvs.length) return;
+    const aliases = keyAliases;
+    startTransition(async () => {
+      const newReports: MonthlyReport[] = [];
+      const newErrors: string[] = [];
+      for (const { text, filename } of cachedCsvs) {
+        try {
+          newReports.push(processMonthlyCSV(text, filename, buildCustomGroups(filename), aliases, hiddenKeys, demotedKeys));
+        } catch (e) {
+          newErrors.push(`${filename}: ${e instanceof Error ? e.message : 'Unexpected error.'}`);
+        }
       }
+      applyResults(newReports, newErrors);
     });
   }
 
   function reset() {
     setReports([]);
     setErrors([]);
+    setCachedCsvs([]);
+    setNeedsReprocess(false);
     setSlots(Array(brandCount).fill(null));
     setExpandedGroups(new Set());
     inputRefs.current.forEach(r => { if (r) r.value = ''; });
@@ -245,6 +520,152 @@ export default function MonthlyReportSection() {
   return (
     <div className="space-y-6">
 
+      {/* ── Promo Key Manager (always visible) ── */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm print:hidden overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setShowPromoManager(p => !p)}
+          className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-slate-50 transition-colors"
+        >
+          <div>
+            <p className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+              Promo Key Manager
+              <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                {STANDARD_GROUP_NAMES.length + userStdGroups.filter(g => g.name.trim()).length} groups
+              </span>
+              {keyAliases.length > 0 && (
+                <span className="inline-flex items-center rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-600">
+                  {keyAliases.length} mapping{keyAliases.length !== 1 ? 's' : ''}
+                </span>
+              )}
+            </p>
+            <p className="text-xs text-slate-400 mt-0.5">View standard promo keys, add new ones, and manage key mappings</p>
+          </div>
+          <svg className={`h-4 w-4 text-slate-400 transition-transform duration-200 shrink-0 ${showPromoManager ? 'rotate-180' : ''}`} viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+          </svg>
+        </button>
+
+        {showPromoManager && (
+          <div className="border-t border-slate-100 px-5 py-5 space-y-6">
+
+            {/* Brand-specific promo key sections */}
+            <div className="space-y-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Standard Promo Keys by Brand</p>
+              {Object.entries(BRAND_CONFIGS).map(([key, cfg]) => {
+                const isActive = reports.some(r => r.brand === key);
+                const brandUserGroups = userStdGroups.filter(g => g.brand === key);
+                const isAdding = addingToBrand === key;
+                return (
+                  <div key={key} className={`rounded-xl border px-4 py-3 ${isActive ? 'border-teal-300 bg-teal-50/40' : 'border-slate-200 bg-slate-50/40'}`}>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className={`text-xs font-bold flex items-center gap-2 ${isActive ? 'text-teal-700' : 'text-slate-600'}`}>
+                        {cfg.displayName}
+                        {isActive && <span className="rounded-full bg-teal-600 text-white text-[9px] font-bold px-1.5 py-0.5">Active</span>}
+                        <span className="text-[10px] font-normal text-slate-400">{cfg.groupNames.length + brandUserGroups.length} groups</span>
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => { setAddingToBrand(isAdding ? null : key); setNewGroupName(''); setNewGroupKeywords(''); }}
+                        className={`text-[11px] font-semibold rounded-lg px-2.5 py-1 transition-colors ${isAdding ? 'bg-slate-200 text-slate-600' : 'bg-teal-50 text-teal-600 hover:bg-teal-100'}`}
+                      >
+                        {isAdding ? 'Cancel' : '+ Add'}
+                      </button>
+                    </div>
+
+                    {/* Standard promo key chips (excludes Ad-hoc group) */}
+                    <div className="flex flex-wrap gap-1.5">
+                      {cfg.groupNames.filter(n => n !== ADHOC_GROUP_NAME).map(name => (
+                        <span key={name} className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium border ${isActive ? 'bg-teal-100 border-teal-300 text-teal-800' : 'bg-blue-50 border-blue-200 text-blue-700'}`}>{name}</span>
+                      ))}
+                      {brandUserGroups.map(g => (
+                        <span key={g.id} className="inline-flex items-center gap-1 rounded-full bg-teal-50 border border-teal-300 px-2.5 py-1 text-[11px] font-medium text-teal-700">
+                          {g.name}
+                          {g.keywords && <span className="text-teal-400 font-normal text-[10px]">({g.keywords})</span>}
+                          <button onClick={() => removeUserStdGroup(g.id)} className="ml-0.5 text-teal-400 hover:text-rose-500 leading-none text-xs transition-colors">×</button>
+                        </span>
+                      ))}
+                    </div>
+
+                    {/* Ad-hoc / VIP FBTs / Cashbacks subsection */}
+                    <div className="mt-2.5 pt-2.5 border-t border-slate-200/70">
+                      <p className="text-[10px] font-semibold text-slate-400 mb-1.5">Ad-hoc / VIP FBTs / Cashbacks</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(ADHOC_NAMES as readonly string[]).filter(n => key === 'roosterbet' || n !== 'Mikey').map(n => (
+                          <span key={n} className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium border ${isActive ? 'bg-teal-100 border-teal-300 text-teal-800' : 'bg-blue-50 border-blue-200 text-blue-700'}`}>{n}</span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {isAdding && (
+                      <div className="mt-3 pt-3 border-t border-slate-200 flex gap-2 flex-wrap sm:flex-nowrap">
+                        <input
+                          type="text"
+                          placeholder="Promo key name"
+                          value={newGroupName}
+                          onChange={e => setNewGroupName(e.target.value)}
+                          onKeyDown={e => e.key === 'Enter' && addUserStdGroupToBrand(key)}
+                          autoFocus
+                          className="flex-1 min-w-0 rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-700 placeholder-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-400"
+                        />
+                        <input
+                          type="text"
+                          placeholder="Keywords, comma-separated (optional)"
+                          value={newGroupKeywords}
+                          onChange={e => setNewGroupKeywords(e.target.value)}
+                          onKeyDown={e => e.key === 'Enter' && addUserStdGroupToBrand(key)}
+                          className="flex-[2] min-w-0 rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-700 placeholder-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-400"
+                        />
+                        <button
+                          onClick={() => addUserStdGroupToBrand(key)}
+                          disabled={!newGroupName.trim()}
+                          className="rounded-lg bg-teal-600 text-white px-3 py-1.5 text-xs font-semibold disabled:opacity-40 hover:bg-teal-700 transition-colors shrink-0"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+            </div>
+
+            {/* Key mappings */}
+            {keyAliases.length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-2">Key Mappings</p>
+                <div className="space-y-1.5">
+                  {keyAliases.map(alias => (
+                    <div key={alias.bonusKey} className="flex items-center gap-2 text-xs bg-violet-50 border border-violet-100 rounded-lg px-3 py-2">
+                      <span className="font-mono text-slate-600 truncate max-w-[220px]">{alias.bonusKey}</span>
+                      <span className="text-violet-400 shrink-0">→</span>
+                      <span className="font-semibold text-violet-700 truncate">{alias.groupName}</span>
+                      <button onClick={() => removeAlias(alias.bonusKey)} className="ml-auto shrink-0 text-[10px] text-rose-400 hover:text-rose-600 font-semibold transition-colors">Remove</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Hidden keys restore section */}
+            {hiddenKeys.length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-2">Hidden Keys ({hiddenKeys.length})</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {hiddenKeys.map(k => (
+                    <span key={k} className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 border border-rose-200 px-2.5 py-1 text-[11px] font-medium text-rose-600">
+                      <span className="truncate max-w-[200px]">{k}</span>
+                      <button onClick={() => unhideKey(k)} className="text-rose-400 hover:text-teal-600 font-semibold transition-colors text-[10px]" title="Restore to report">↩ Restore</button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* ── Step 1: brand count ── */}
       {!hasReports && (
         <div className="bg-white rounded-xl border border-slate-200 px-5 py-4 shadow-sm print:hidden">
@@ -264,6 +685,82 @@ export default function MonthlyReportSection() {
               </button>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* ── Seasonal Promo Keys ── */}
+      {!hasReports && (
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm print:hidden overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowPromoPanel(p => !p)}
+            className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-slate-50 transition-colors"
+          >
+            <div>
+              <p className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+                Seasonal Promo Keys
+                {promoGroups.filter(g => g.name.trim()).length > 0 && (
+                  <span className="inline-flex items-center rounded-full bg-teal-100 px-2 py-0.5 text-[10px] font-semibold text-teal-700">
+                    {promoGroups.filter(g => g.name.trim()).length} added
+                  </span>
+                )}
+              </p>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Optional — add sport-specific promo groups for this month's seasonal events
+              </p>
+            </div>
+            <svg
+              className={`h-4 w-4 text-slate-400 transition-transform duration-200 ${showPromoPanel ? 'rotate-180' : ''}`}
+              viewBox="0 0 20 20" fill="currentColor"
+            >
+              <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+            </svg>
+          </button>
+
+          {showPromoPanel && (
+            <div className="border-t border-slate-100 px-5 py-4 space-y-3">
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Any promo keys containing this name will be aggregated as a group instead of going into <span className="font-semibold text-slate-500">Ad-hoc / VIP</span>. Match is case-insensitive.
+              </p>
+
+              {promoGroups.length === 0 && (
+                <p className="text-xs text-slate-400 italic py-1">No promo keys added yet.</p>
+              )}
+
+              {promoGroups.map(group => (
+                <div key={group.id} className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="Promo key name (e.g. Copa América 2025)"
+                    value={group.name}
+                    onChange={e => updatePromoGroupName(group.id, e.target.value)}
+                    className="flex-1 min-w-0 rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-700 placeholder-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-400 focus:border-transparent"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removePromoGroup(group.id)}
+                    className="h-8 w-8 flex items-center justify-center rounded-lg text-rose-400 hover:bg-rose-50 hover:text-rose-600 transition-colors shrink-0"
+                    aria-label="Remove"
+                  >
+                    <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+
+              <button
+                type="button"
+                onClick={addPromoGroup}
+                className="inline-flex items-center gap-1.5 text-xs font-semibold text-teal-600 hover:text-teal-700 transition-colors mt-1"
+              >
+                <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
+                </svg>
+                Add Promo Group
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -310,7 +807,7 @@ export default function MonthlyReportSection() {
                       </svg>
                     </div>
                     <p className="text-xs font-semibold text-emerald-700 truncate w-full px-1">{file.name}</p>
-                    <p className="text-[10px] text-slate-400">Click to replace</p>
+                    {(() => { const b = detectBrand(file.name); return b ? <span className="text-[9px] font-bold uppercase tracking-wide rounded-full bg-teal-600 text-white px-2 py-0.5">{BRAND_CONFIGS[b].displayName}</span> : <p className="text-[10px] text-slate-400">Click to replace</p>; })()}
                   </>
                 ) : (
                   <>
@@ -379,6 +876,20 @@ export default function MonthlyReportSection() {
         </div>
       )}
 
+      {/* ── Re-apply banner ── */}
+      {hasReports && needsReprocess && (
+        <div className="flex items-center justify-between gap-3 rounded-xl bg-violet-50 border border-violet-200 px-4 py-3 print:hidden">
+          <p className="text-sm text-violet-700 font-medium">Key mappings updated — re-apply to see changes in the report.</p>
+          <button
+            onClick={reprocess}
+            disabled={isPending}
+            className="inline-flex items-center gap-2 rounded-lg bg-violet-600 hover:bg-violet-700 disabled:opacity-60 px-3 py-2 text-xs font-semibold text-white shadow-sm active:scale-95 transition-all shrink-0"
+          >
+            {isPending ? <><div className="h-3 w-3 rounded-full border-2 border-white/30 border-t-white animate-spin" />Re-applying…</> : 'Re-apply Mappings'}
+          </button>
+        </div>
+      )}
+
       {/* ── Report tables ── */}
       {hasReports && (
         <div className="space-y-6">
@@ -393,6 +904,11 @@ export default function MonthlyReportSection() {
               onToggleSort={toggleSort}
               onToggleGroup={toggleGroup}
               onDownload={() => downloadMonthlyExcel(report)}
+              onAssignKey={assignKey}
+              keyAliases={keyAliases}
+              onRemoveAlias={removeAlias}
+              onHideKey={hideKey}
+              onDemoteKey={demoteKey}
             />
           ))}
         </div>

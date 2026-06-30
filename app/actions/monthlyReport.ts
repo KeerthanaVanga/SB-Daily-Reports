@@ -1,6 +1,6 @@
 'use server';
 
-import { isMonthlyReportCSV, processMonthlyCSV, MonthlyReport } from '../../lib/monthlyReportProcessor';
+import { isMonthlyReportCSV, processMonthlyCSV, MonthlyReport, CustomPromoGroup } from '../../lib/monthlyReportProcessor';
 
 export interface MonthlyActionState {
   report?: MonthlyReport;
@@ -20,7 +20,12 @@ export async function processMonthlyReport(formData: FormData): Promise<MonthlyA
     if (!isMonthlyReportCSV(text)) {
       return { error: 'This does not appear to be a monthly freebet report CSV. Please check the file.' };
     }
-    const report = processMonthlyCSV(text, file.name);
+    let customGroups: CustomPromoGroup[] = [];
+    const raw = formData.get('customGroups');
+    if (typeof raw === 'string' && raw) {
+      try { customGroups = JSON.parse(raw); } catch { /* ignore malformed */ }
+    }
+    const report = processMonthlyCSV(text, file.name, customGroups);
     return { report };
   } catch (e) {
     return {

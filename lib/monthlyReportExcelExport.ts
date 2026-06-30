@@ -60,7 +60,7 @@ const COL_HEADERS = [
 ];
 
 function cellVal(row: AggregatedRow, key: keyof AggregatedRow): unknown {
-  if (key === 'bonusKey') return row[key];
+  if (key === 'month' || key === 'bonusKey') return row[key];
   const n = row[key] as number;
   if (key === 'activationRate' || key === 'usageRate' || key === 'payoutRate') return n / 100;
   return n;
@@ -129,7 +129,7 @@ function buildSheet(XLSX: XLSXModule, report: MonthlyReport) {
   ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: r - 1, c: NUM_COLS - 1 } });
   ws['!merges'] = merges;
   ws['!cols'] = [
-    { wch: 35 }, { wch: 9 },  { wch: 14 }, { wch: 13 },
+    { wch: 10 }, { wch: 35 }, { wch: 9 },  { wch: 14 }, { wch: 13 },
     { wch: 11 }, { wch: 14 }, { wch: 13 },
     { wch: 11 }, { wch: 14 }, { wch: 11 }, { wch: 11 },
   ];
