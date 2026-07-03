@@ -163,38 +163,96 @@ function ReportTable({
   const justDropped = useRef(false);
   const [showAddSeasonal, setShowAddSeasonal] = useState(false);
   const [seasonalInput, setSeasonalInput] = useState('');
+  const [groupOrder, setGroupOrder] = useState<string[]>(() => report.groups.map(g => g.name));
+  const [draggedGroupName, setDraggedGroupName] = useState<string | null>(null);
+  const [dragOverGroupReorder, setDragOverGroupReorder] = useState<string | null>(null);
+  const [hoveredGrip, setHoveredGrip] = useState<string | null>(null);
 
-  const sortedGroups = sortKey
+  // Keep groupOrder in sync when groups change (new groups added after reprocess)
+  const prevGroupNamesRef = useRef<string[]>([]);
+  const currentGroupNames = report.groups.map(g => g.name);
+  const prevStr = prevGroupNamesRef.current.join('|');
+  const currStr = currentGroupNames.join('|');
+  if (prevStr !== currStr) {
+    prevGroupNamesRef.current = currentGroupNames;
+    setGroupOrder(prev => {
+      const kept = prev.filter(n => currentGroupNames.includes(n));
+      const added = currentGroupNames.filter(n => !prev.includes(n));
+      return [...kept, ...added];
+    });
+  }
+
+  function reorderGroup(fromName: string, toName: string) {
+    if (fromName === toName) return;
+    setGroupOrder(prev => {
+      const next = [...prev];
+      const fi = next.indexOf(fromName);
+      const ti = next.indexOf(toName);
+      if (fi === -1 || ti === -1) return prev;
+      next.splice(fi, 1);
+      next.splice(ti, 0, fromName);
+      return next;
+    });
+  }
+
+  const orderedGroups = sortKey
     ? [...report.groups]
         .sort((a, b) => cmp(a.total, b.total, sortKey, sortDir))
         .map(g => ({ ...g, members: [...g.members].sort((a, b) => cmp(a, b, sortKey, sortDir)) }))
-    : report.groups;
+    : (() => {
+        const map = new Map(report.groups.map(g => [g.name, g]));
+        return groupOrder.map(n => map.get(n)).filter(Boolean) as typeof report.groups;
+      })();
+
   const sortedIndividuals = sortKey
     ? [...report.individuals].sort((a, b) => cmp(a, b, sortKey, sortDir))
     : report.individuals;
 
   const bodyRows: React.ReactNode[] = [];
 
-  for (const g of sortedGroups) {
+  for (const g of orderedGroups) {
     const gKey = `${reportIdx}:${g.name}`;
     const expanded = expandedGroups.has(gKey);
     const isDropTarget = dragOverGroup === gKey && !!draggedKey;
+    const isReorderTarget = dragOverGroupReorder === g.name && !!draggedGroupName && draggedGroupName !== g.name;
+    const isBeingDraggedGroup = draggedGroupName === g.name;
     bodyRows.push(
       <tr
         key={gKey}
-        onClick={() => { if (justDropped.current) { justDropped.current = false; return; } if (!draggedKey) onToggleGroup(gKey); }}
-        onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverGroup(gKey); }}
-        onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverGroup(null); }}
-        onDrop={e => { e.preventDefault(); justDropped.current = true; const k = e.dataTransfer.getData('text/plain'); if (k) onAssignKey(k, g.name); setDragOverGroup(null); setDraggedKey(null); }}
-        className={`cursor-pointer transition-all border-b ${isDropTarget ? 'bg-violet-100 border-violet-400 outline outline-2 outline-violet-400 outline-offset-[-2px]' : 'bg-blue-50 hover:bg-blue-100 border-blue-200'}`}
+        draggable={hoveredGrip === g.name}
+        onClick={() => { if (justDropped.current) { justDropped.current = false; return; } if (!draggedKey && !draggedGroupName) onToggleGroup(gKey); }}
+        onDragStart={e => { if (hoveredGrip !== g.name) { e.preventDefault(); return; } e.dataTransfer.setData('application/group-reorder', g.name); e.dataTransfer.effectAllowed = 'move'; setDraggedGroupName(g.name); }}
+        onDragEnd={() => { setDraggedGroupName(null); setDragOverGroupReorder(null); setHoveredGrip(null); }}
+        onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (draggedGroupName) setDragOverGroupReorder(g.name); else setDragOverGroup(gKey); }}
+        onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) { setDragOverGroup(null); setDragOverGroupReorder(null); } }}
+        onDrop={e => {
+          e.preventDefault(); justDropped.current = true;
+          const grp = e.dataTransfer.getData('application/group-reorder');
+          if (grp) { reorderGroup(grp, g.name); }
+          else { const k = e.dataTransfer.getData('text/plain'); if (k) onAssignKey(k, g.name); }
+          setDragOverGroup(null); setDragOverGroupReorder(null); setDraggedGroupName(null); setDraggedKey(null);
+        }}
+        className={`cursor-pointer transition-all border-b ${
+          isBeingDraggedGroup ? 'opacity-40 bg-blue-50 border-blue-200' :
+          isReorderTarget ? 'border-t-[3px] border-t-indigo-500 bg-indigo-50/60' :
+          isDropTarget ? 'bg-violet-100 border-violet-400 outline outline-2 outline-violet-400 outline-offset-[-2px]' :
+          'bg-blue-50 hover:bg-blue-100 border-blue-200'
+        }`}
       >
         {COLS.map(col => (
-          <td key={col.key} className={`px-3 py-2.5 font-semibold whitespace-nowrap ${isDropTarget ? 'text-violet-800' : 'text-blue-900'} ${col.align === 'right' ? 'text-right' : 'text-left'}`}>
+          <td key={col.key} className={`px-3 py-2.5 font-semibold whitespace-nowrap ${isDropTarget ? 'text-violet-800' : isReorderTarget ? 'text-indigo-800' : 'text-blue-900'} ${col.align === 'right' ? 'text-right' : 'text-left'}`}>
             {col.key === 'bonusKey' ? (
               <span className="inline-flex items-center gap-2">
+                <span
+                  className="text-slate-300 hover:text-slate-500 text-[13px] leading-none shrink-0 cursor-grab active:cursor-grabbing select-none"
+                  onMouseEnter={() => setHoveredGrip(g.name)}
+                  onMouseLeave={() => setHoveredGrip(null)}
+                  title="Drag to reorder"
+                >⠿</span>
                 <span className={`text-[10px] transition-transform duration-150 inline-block ${isDropTarget ? 'text-violet-400' : 'text-blue-400'}`} style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}>▶</span>
                 {g.name}
                 {isDropTarget && <span className="ml-1 text-[10px] font-normal text-violet-500 animate-pulse">Drop here</span>}
+                {isReorderTarget && <span className="ml-1 text-[10px] font-normal text-indigo-500 animate-pulse">Move here</span>}
               </span>
             ) : col.fmt(g.total)}
           </td>
@@ -422,7 +480,21 @@ export default function MonthlyReportSection() {
   // Persist aliases and user-added groups to localStorage
   useEffect(() => {
     try { const s = localStorage.getItem('promoKeyAliases'); if (s) setKeyAliases(JSON.parse(s)); } catch {}
-    try { const s = localStorage.getItem('userStdGroups'); if (s) { const g = JSON.parse(s); setUserStdGroups(g); if (g.length) nextUserGroupId.current = Math.max(...g.map((x: UserStdGroup) => x.id)) + 1; } } catch {}
+    try {
+      const s = localStorage.getItem('userStdGroups');
+      if (s) {
+        const g: UserStdGroup[] = JSON.parse(s);
+        // Remove any custom group whose name duplicates a standard group name
+        const deduped = g.filter((ug, idx, arr) => {
+          const n = ug.name.trim().toLowerCase();
+          if (STANDARD_GROUP_NAMES.some(sg => sg.toLowerCase() === n)) return false;
+          return arr.findIndex(x => x.name.trim().toLowerCase() === n && x.brand === ug.brand) === idx;
+        });
+        if (deduped.length !== g.length) localStorage.setItem('userStdGroups', JSON.stringify(deduped));
+        setUserStdGroups(deduped);
+        if (deduped.length) nextUserGroupId.current = Math.max(...deduped.map(x => x.id)) + 1;
+      }
+    } catch {}
     try { const s = localStorage.getItem('hiddenPromoKeys'); if (s) setHiddenKeys(JSON.parse(s)); } catch {}
     try { const s = localStorage.getItem('demotedPromoKeys'); if (s) setDemotedKeys(JSON.parse(s)); } catch {}
   }, []);
@@ -445,8 +517,18 @@ export default function MonthlyReportSection() {
   }, []);
 
   function addUserStdGroupToBrand(brand: string) {
-    if (!newGroupName.trim()) return;
-    setUserStdGroups(prev => [...prev, { id: nextUserGroupId.current++, name: newGroupName.trim(), keywords: newGroupKeywords.trim(), brand }]);
+    const trimmed = newGroupName.trim();
+    if (!trimmed) return;
+    // Reject if name duplicates a standard group or an existing custom group for this brand
+    const isStandard = STANDARD_GROUP_NAMES.some(s => s.toLowerCase() === trimmed.toLowerCase());
+    const isDupe = userStdGroups.some(g => g.brand === brand && g.name.trim().toLowerCase() === trimmed.toLowerCase());
+    if (isStandard || isDupe) {
+      setNewGroupName('');
+      setNewGroupKeywords('');
+      setAddingToBrand(null);
+      return;
+    }
+    setUserStdGroups(prev => [...prev, { id: nextUserGroupId.current++, name: trimmed, keywords: newGroupKeywords.trim(), brand }]);
     setNewGroupName('');
     setNewGroupKeywords('');
     setAddingToBrand(null);

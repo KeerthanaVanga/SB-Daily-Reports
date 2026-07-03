@@ -322,7 +322,12 @@ export function processMonthlyCSV(csvText: string, filename = '', customGroups: 
       return baseAdhocDef.test(lk);
     },
   };
-  const effectiveDefs = [...standardDefs, ...customDefs, adhocDef];
+  const seenDefNames = new Set<string>();
+  const effectiveDefs = [...standardDefs, ...customDefs, adhocDef].filter(d => {
+    if (seenDefNames.has(d.name)) return false;
+    seenDefNames.add(d.name);
+    return true;
+  });
 
   function matchEffectiveGroup(key: string): string | null {
     const lk = key.toLowerCase().trim();
