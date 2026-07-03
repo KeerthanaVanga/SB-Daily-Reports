@@ -139,6 +139,8 @@ function ReportTable({
   onRemoveAlias,
   onHideKey,
   onDemoteKey,
+  phantomGroups,
+  onAddSeasonalGroup,
 }: {
   report: MonthlyReport;
   reportIdx: number;
@@ -153,10 +155,14 @@ function ReportTable({
   onRemoveAlias: (bonusKey: string) => void;
   onHideKey: (bonusKey: string) => void;
   onDemoteKey: (bonusKey: string) => void;
+  phantomGroups: string[];
+  onAddSeasonalGroup: (name: string) => void;
 }) {
   const [draggedKey, setDraggedKey] = useState<string | null>(null);
   const [dragOverGroup, setDragOverGroup] = useState<string | null>(null);
   const justDropped = useRef(false);
+  const [showAddSeasonal, setShowAddSeasonal] = useState(false);
+  const [seasonalInput, setSeasonalInput] = useState('');
 
   const sortedGroups = sortKey
     ? [...report.groups]
@@ -225,6 +231,38 @@ function ReportTable({
     }
   }
 
+  // Seasonal phantom groups — empty drop targets for groups not yet populated
+  for (const pgName of phantomGroups) {
+    const pgKey = `${reportIdx}:phantom:${pgName}`;
+    const isDropTarget = dragOverGroup === pgKey && !!draggedKey;
+    bodyRows.push(
+      <tr
+        key={pgKey}
+        onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setDragOverGroup(pgKey); }}
+        onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverGroup(null); }}
+        onDrop={e => { e.preventDefault(); justDropped.current = true; const k = e.dataTransfer.getData('text/plain'); if (k) onAssignKey(k, pgName); setDragOverGroup(null); setDraggedKey(null); }}
+        className={`border-b-2 border-dashed transition-all ${isDropTarget ? 'bg-amber-50 border-amber-400 outline outline-2 outline-amber-400 outline-offset-[-2px]' : 'bg-amber-50/30 border-amber-200 hover:border-amber-300'}`}
+      >
+        {COLS.map(col => (
+          <td key={col.key} className={`px-3 py-2.5 whitespace-nowrap ${col.align === 'right' ? 'text-right' : 'text-left'}`}>
+            {col.key === 'bonusKey' ? (
+              <span className="inline-flex items-center gap-2">
+                <span className="text-[9px] font-bold text-amber-500 bg-amber-100 border border-amber-300 rounded px-1.5 py-0.5 uppercase tracking-wide">Seasonal</span>
+                <span className={`font-semibold ${isDropTarget ? 'text-amber-700' : 'text-amber-600'}`}>{pgName}</span>
+                {isDropTarget
+                  ? <span className="text-[10px] text-amber-600 font-semibold animate-pulse ml-1">Drop here</span>
+                  : <span className="text-[10px] text-amber-400 font-normal ml-1">Drop keys here to assign</span>
+                }
+              </span>
+            ) : (
+              <span className="text-amber-300 text-[10px]">—</span>
+            )}
+          </td>
+        ))}
+      </tr>
+    );
+  }
+
   const isDragging = !!draggedKey;
 
   sortedIndividuals.forEach((ind, i) => {
@@ -274,19 +312,60 @@ function ReportTable({
         <div>
           <p className="text-sm font-semibold text-slate-800 capitalize">{report.brandName}</p>
           <p className="text-xs text-slate-400 mt-0.5">
-            {report.groups.length} group{report.groups.length !== 1 ? 's' : ''} · {report.individuals.length} individual bonus{report.individuals.length !== 1 ? 'es' : ''}
+            {report.groups.length + phantomGroups.length} group{(report.groups.length + phantomGroups.length) !== 1 ? 's' : ''} · {report.individuals.length} individual bonus{report.individuals.length !== 1 ? 'es' : ''}
           </p>
         </div>
-        <button
-          onClick={onDownload}
-          className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 active:scale-95 transition-all"
-        >
-          <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
-            <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
-          </svg>
-          Excel
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => { setShowAddSeasonal(p => !p); setSeasonalInput(''); }}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold shadow-sm active:scale-95 transition-all ${showAddSeasonal ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-amber-50 text-amber-600 border border-amber-200 hover:bg-amber-100'}`}
+          >
+            <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
+            </svg>
+            Seasonal Group
+          </button>
+          <button
+            onClick={onDownload}
+            className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 active:scale-95 transition-all"
+          >
+            <svg className="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
+            Excel
+          </button>
+        </div>
       </div>
+      {showAddSeasonal && (
+        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-amber-100 bg-amber-50/60">
+          <span className="text-[9px] font-bold text-amber-500 bg-amber-100 border border-amber-300 rounded px-1.5 py-0.5 uppercase tracking-wide shrink-0">Seasonal</span>
+          <input
+            type="text"
+            placeholder="Group name, e.g. Finals Booster, WC Reload…"
+            value={seasonalInput}
+            onChange={e => setSeasonalInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && seasonalInput.trim()) { onAddSeasonalGroup(seasonalInput.trim()); setShowAddSeasonal(false); setSeasonalInput(''); }
+              if (e.key === 'Escape') { setShowAddSeasonal(false); setSeasonalInput(''); }
+            }}
+            autoFocus
+            className="flex-1 min-w-0 rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-xs text-slate-700 placeholder-amber-300 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent"
+          />
+          <button
+            onClick={() => { if (seasonalInput.trim()) { onAddSeasonalGroup(seasonalInput.trim()); setShowAddSeasonal(false); setSeasonalInput(''); } }}
+            disabled={!seasonalInput.trim()}
+            className="rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-40 disabled:cursor-not-allowed px-3 py-1.5 text-xs font-semibold text-white transition-all shrink-0"
+          >
+            Add
+          </button>
+          <button
+            onClick={() => { setShowAddSeasonal(false); setSeasonalInput(''); }}
+            className="rounded-lg border border-slate-200 bg-white hover:bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-600 transition-all shrink-0"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
       <div className="overflow-x-auto">
         <table className="w-full text-xs border-collapse">
           <thead>
@@ -554,6 +633,33 @@ export default function MonthlyReportSection() {
       for (const { text, filename } of cachedCsvs) {
         try {
           newReports.push(processMonthlyCSV(text, filename, buildCustomGroups(filename), aliases, hiddenKeys, demotedKeys));
+        } catch (e) {
+          newErrors.push(`${filename}: ${e instanceof Error ? e.message : 'Unexpected error.'}`);
+        }
+      }
+      applyResults(newReports, newErrors);
+    });
+  }
+
+  function addSeasonalGroup(name: string) {
+    if (!name.trim()) return;
+    const newGroup = { id: nextPromoId.current++, name: name.trim() };
+    const newPromoGroups = [...promoGroups, newGroup];
+    setPromoGroups(newPromoGroups);
+    if (!cachedCsvs.length) return;
+    startTransition(async () => {
+      const newReports: MonthlyReport[] = [];
+      const newErrors: string[] = [];
+      for (const { text, filename } of cachedCsvs) {
+        try {
+          const fileBrand = detectBrand(filename);
+          const cg = [
+            ...newPromoGroups.filter(g => g.name.trim()).map(g => ({ name: g.name.trim(), keywords: [g.name.trim()] })),
+            ...userStdGroups
+              .filter(g => g.name.trim() && (!fileBrand || !g.brand || g.brand === fileBrand))
+              .map(g => ({ name: g.name.trim(), keywords: g.keywords ? g.keywords.split(',').map(k => k.trim()).filter(Boolean) : [g.name.trim()] })),
+          ];
+          newReports.push(processMonthlyCSV(text, filename, cg, keyAliases, hiddenKeys, demotedKeys));
         } catch (e) {
           newErrors.push(`${filename}: ${e instanceof Error ? e.message : 'Unexpected error.'}`);
         }
@@ -961,24 +1067,32 @@ export default function MonthlyReportSection() {
       {/* ── Report tables ── */}
       {hasReports && (
         <div className="space-y-6">
-          {reports.map((report, i) => (
-            <ReportTable
-              key={i}
-              report={report}
-              reportIdx={i}
-              sortKey={sortKey}
-              sortDir={sortDir}
-              expandedGroups={expandedGroups}
-              onToggleSort={toggleSort}
-              onToggleGroup={toggleGroup}
-              onDownload={() => downloadMonthlyExcel(report)}
-              onAssignKey={assignKey}
-              keyAliases={keyAliases}
-              onRemoveAlias={removeAlias}
-              onHideKey={hideKey}
-              onDemoteKey={demoteKey}
-            />
-          ))}
+          {reports.map((report, i) => {
+            const existingNames = new Set(report.groups.map(g => g.name));
+            const phantomGroupsForReport = promoGroups
+              .filter(g => g.name.trim() && !existingNames.has(g.name.trim()))
+              .map(g => g.name.trim());
+            return (
+              <ReportTable
+                key={i}
+                report={report}
+                reportIdx={i}
+                sortKey={sortKey}
+                sortDir={sortDir}
+                expandedGroups={expandedGroups}
+                onToggleSort={toggleSort}
+                onToggleGroup={toggleGroup}
+                onDownload={() => downloadMonthlyExcel(report)}
+                onAssignKey={assignKey}
+                keyAliases={keyAliases}
+                onRemoveAlias={removeAlias}
+                onHideKey={hideKey}
+                onDemoteKey={demoteKey}
+                phantomGroups={phantomGroupsForReport}
+                onAddSeasonalGroup={addSeasonalGroup}
+              />
+            );
+          })}
         </div>
       )}
 
