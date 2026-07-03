@@ -369,11 +369,9 @@ export function processMonthlyCSV(csvText: string, filename = '', customGroups: 
       members.push(computeRates(key, rows));
     }
 
-    const displayName = members.length === 1 ? members[0].bonusKey : def.name;
-
     groups.push({
-      name: displayName,
-      total: computeRates(displayName, bucket),
+      name: def.name,
+      total: computeRates(def.name, bucket),
       members,
     });
   }

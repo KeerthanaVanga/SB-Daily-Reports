@@ -2,8 +2,76 @@
 
 import { useRef, useState, useTransition, useCallback, useEffect } from 'react';
 import { processMonthlyCSV, isMonthlyReportCSV, STANDARD_GROUP_NAMES, ADHOC_GROUP_NAME, BRAND_CONFIGS, detectBrand, ADHOC_NAMES } from '../../lib/monthlyReportProcessor';
-import { downloadMonthlyExcel } from '../../lib/monthlyReportExcelExport';
 import type { AggregatedRow, MonthlyReport, KeyAlias } from '../../lib/monthlyReportProcessor';
+
+async function downloadMonthlyExcel(report: MonthlyReport): Promise<void> {
+  const XLSX = await import('xlsx-js-style');
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const wb: any = XLSX.utils.book_new();
+
+  const NUM_COLS = 11;
+  const COL_HEADERS = ['Bonus Key','Issued','Issued Amt (€)','Issued Players','Act. Rate','Act. Amt (€)','Act. Players','Usage Rate','Payout Amt (€)','Payout Rate','Avg Bet (€)'];
+
+  function mkStyle(bg: string, bold: boolean, color: string, align = 'left') {
+    const b = { style: 'thin', color: { rgb: 'CBD5E1' } };
+    return { fill: { patternType: 'solid', fgColor: { rgb: bg } }, font: { bold, color: { rgb: color }, sz: 9 }, alignment: { horizontal: align, vertical: 'center' }, border: { top: b, bottom: b, left: b, right: b } };
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ws: Record<string, any> = {};
+  const merges: { s: { r: number; c: number }; e: { r: number; c: number } }[] = [];
+  let r = 0;
+
+  const addr = (row: number, col: number) => XLSX.utils.encode_cell({ r: row, c: col });
+
+  // Title
+  const titleStyle = mkStyle('1E3A8A', true, 'FFFFFF', 'center');
+  ws[addr(r, 0)] = { v: `Monthly Freebet Report — ${report.brandName}`, t: 's', s: titleStyle };
+  for (let c = 1; c < NUM_COLS; c++) ws[addr(r, c)] = { v: '', t: 's', s: titleStyle };
+  merges.push({ s: { r, c: 0 }, e: { r, c: NUM_COLS - 1 } });
+  r++;
+
+  // Headers
+  const hdrStyle = mkStyle('2563EB', true, 'FFFFFF', 'center');
+  COL_HEADERS.forEach((h, c) => { ws[addr(r, c)] = { v: h, t: 's', s: hdrStyle }; });
+  r++;
+
+  function writeRow(label: string, row: AggregatedRow, bg: string, color: string, bold: boolean) {
+    const ls = mkStyle(bg, bold, color, 'left');
+    const rs = mkStyle(bg, bold, color, 'right');
+    ws[addr(r, 0)] = { v: label, t: 's', s: ls };
+    const vals: [number, unknown, string | undefined][] = [
+      [1, row.issuedCount,    '#,##0'],
+      [2, row.issuedAmount,   '#,##0.00'],
+      [3, row.issuedPlayers,  '#,##0'],
+      [4, row.activationRate / 100, '0.00%'],
+      [5, row.activatedAmount,'#,##0.00'],
+      [6, row.activatedPlayers,'#,##0'],
+      [7, row.usageRate / 100,'0.00%'],
+      [8, row.payoutAmount,   '#,##0.00'],
+      [9, row.payoutRate / 100,'0.00%'],
+      [10, row.avgBet,        '#,##0.00'],
+    ];
+    vals.forEach(([c, v, z]) => { ws[addr(r, c)] = { v, t: 'n', ...(z ? { z } : {}), s: rs }; });
+    r++;
+  }
+
+  // ONE aggregated row per group — no member sub-rows
+  for (const g of report.groups) {
+    writeRow(g.name, g.total, 'DBEAFE', '1E40AF', true);
+  }
+
+  // Monthly total
+  writeRow('Monthly Total', report.monthlyTotal, 'FEF08A', '78350F', true);
+
+  ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: r - 1, c: NUM_COLS - 1 } });
+  ws['!merges'] = merges;
+  ws['!cols'] = [{ wch: 38 }, { wch: 9 }, { wch: 14 }, { wch: 13 }, { wch: 11 }, { wch: 14 }, { wch: 13 }, { wch: 11 }, { wch: 14 }, { wch: 11 }, { wch: 11 }];
+  ws['!rows'] = [{ hpt: 24 }, { hpt: 20 }, ...Array(r - 2).fill({ hpt: 18 })];
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Monthly Report');
+  XLSX.writeFile(wb, `monthly_freebet_report_${report.brandName}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
 
 type SortKey = keyof AggregatedRow;
 type SortDir = 'asc' | 'desc';

@@ -109,19 +109,10 @@ function buildSheet(XLSX: XLSXModule, report: MonthlyReport) {
     r++;
   }
 
-  // Groups
+  // Aggregated group rows only (no member sub-rows)
   for (const g of report.groups) {
     addRow(g.total, g.name, CLR.groupBg, CLR.groupText, true, false);
-    for (const m of g.members) {
-      addRow(m, m.bonusKey, CLR.memberBg, CLR.memberText, false, true);
-    }
   }
-
-  // Individuals
-  report.individuals.forEach((ind, i) => {
-    const bg = i % 2 === 0 ? CLR.indivOdd : CLR.indivEven;
-    addRow(ind, ind.bonusKey, bg, CLR.indivText, false, false);
-  });
 
   // Monthly total
   addRow(report.monthlyTotal, 'Monthly Total', CLR.totalBg, CLR.totalText, true, false);
@@ -129,7 +120,7 @@ function buildSheet(XLSX: XLSXModule, report: MonthlyReport) {
   ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: r - 1, c: NUM_COLS - 1 } });
   ws['!merges'] = merges;
   ws['!cols'] = [
-    { wch: 10 }, { wch: 35 }, { wch: 9 },  { wch: 14 }, { wch: 13 },
+    { wch: 38 }, { wch: 9 },  { wch: 14 }, { wch: 13 },
     { wch: 11 }, { wch: 14 }, { wch: 13 },
     { wch: 11 }, { wch: 14 }, { wch: 11 }, { wch: 11 },
   ];
